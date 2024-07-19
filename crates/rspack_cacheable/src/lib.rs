@@ -1,6 +1,8 @@
 pub use rspack_macros::{cacheable, cacheable_dyn};
-pub mod r#dyn;
 pub mod with;
+
+mod deserialize;
+mod serialize;
 
 #[doc(hidden)]
 pub mod __private {
@@ -12,19 +14,5 @@ pub mod __private {
   pub extern crate rkyv;
 }
 
-pub trait Cacheable {
-  fn serialize(&self) -> Vec<u8>;
-  fn deserialize(bytes: &[u8]) -> Self
-  where
-    Self: Sized;
-}
-
-#[inline]
-pub fn to_bytes<T: Cacheable>(data: &T) -> Vec<u8> {
-  data.serialize()
-}
-
-#[inline]
-pub fn from_bytes<T: Cacheable>(bytes: &[u8]) -> T {
-  T::deserialize(bytes)
-}
+pub use deserialize::{from_bytes, CacheableDeserializer, DeserializeError};
+pub use serialize::{to_bytes, CacheableSerializer, SerializeError};

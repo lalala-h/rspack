@@ -1,15 +1,15 @@
 use rkyv::{
-  ser::{ScratchSpace, Serializer},
   string::{ArchivedString, StringResolver},
   with::{ArchiveWith, DeserializeWith, SerializeWith},
-  Fallible,
 };
+
+use crate::{CacheableDeserializer, CacheableSerializer, DeserializeError, SerializeError};
 
 pub struct AsString;
 
 pub trait AsStringConverter {
-  fn to_string(&self) -> String;
-  fn from_str(s: &str) -> Self
+  fn to_string(&self) -> Result<String, SerializeError>;
+  fn from_str(s: &str) -> Result<Self, DeserializeError>
   where
     Self: Sized;
 }
@@ -38,66 +38,57 @@ where
   }
 }
 
-impl<T, S> SerializeWith<T, S> for AsString
+impl<'a, T, C> SerializeWith<T, CacheableSerializer<'a, C>> for AsString
 where
   T: AsStringConverter,
-  S: ?Sized + Serializer + ScratchSpace,
 {
   #[inline]
-  fn serialize_with(field: &T, serializer: &mut S) -> Result<Self::Resolver, S::Error> {
-    let value = field.to_string();
+  fn serialize_with(
+    field: &T,
+    serializer: &mut CacheableSerializer<'a, C>,
+  ) -> Result<Self::Resolver, SerializeError> {
+    let value = field.to_string()?;
     let inner = ArchivedString::serialize_from_str(&value, serializer)?;
     Ok(AsStringResolver { value, inner })
   }
 }
 
-impl<T, D> DeserializeWith<ArchivedString, T, D> for AsString
+impl<'a, T, C> DeserializeWith<ArchivedString, T, CacheableDeserializer<'a, C>> for AsString
 where
   T: AsStringConverter,
-  D: ?Sized + Fallible,
 {
   #[inline]
-  fn deserialize_with(field: &ArchivedString, _: &mut D) -> Result<T, D::Error> {
-    Ok(AsStringConverter::from_str(field.as_str()))
+  fn deserialize_with(
+    field: &ArchivedString,
+    _: &mut CacheableDeserializer<'a, C>,
+  ) -> Result<T, DeserializeError> {
+    AsStringConverter::from_str(field.as_str())
   }
 }
 
 // for pathbuf
 use std::path::PathBuf;
 impl AsStringConverter for PathBuf {
-  fn to_string(&self) -> String {
-    self.to_string_lossy().to_string()
+  fn to_string(&self) -> Result<String, SerializeError> {
+    Ok(self.to_string_lossy().to_string())
   }
-  fn from_str(s: &str) -> Self
+  fn from_str(s: &str) -> Result<Self, DeserializeError>
   where
     Self: Sized,
   {
-    PathBuf::from(s)
+    Ok(PathBuf::from(s))
   }
 }
 
 // for json value
 impl AsStringConverter for json::JsonValue {
-  fn to_string(&self) -> String {
-    json::stringify(self.clone())
+  fn to_string(&self) -> Result<String, SerializeError> {
+    Ok(json::stringify(self.clone()))
   }
-  fn from_str(s: &str) -> Self
+  fn from_str(s: &str) -> Result<Self, DeserializeError>
   where
     Self: Sized,
   {
-    json::parse(s).expect("parse json failed")
-  }
-}
-
-// for swc_core atom
-impl AsStringConverter for swc_core::ecma::atoms::Atom {
-  fn to_string(&self) -> String {
-    self.as_str().to_string()
-  }
-  fn from_str(s: &str) -> Self
-  where
-    Self: Sized,
-  {
-    Self::from(s)
+    Ok(json::parse(s).expect("parse json failed"))
   }
 }

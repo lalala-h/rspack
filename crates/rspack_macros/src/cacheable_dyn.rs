@@ -1,28 +1,41 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{parse_macro_input, parse_quote, Ident, Item, ItemImpl, ItemTrait, Type};
+use syn::{
+  parse::{Parse, ParseStream},
+  parse_quote, Ident, ItemImpl, ItemTrait, Result, Type,
+};
 
-pub fn impl_cacheable_dyn(_args: TokenStream, tokens: TokenStream) -> TokenStream {
-  let input = parse_macro_input!(tokens as Item);
-
-  match input {
-    Item::Trait(input) => impl_trait(input),
-    Item::Impl(input) => impl_impl(input),
-    _ => panic!("expect Trait or Impl"),
+pub struct CacheableDynArgs {
+  context: syn::Path,
+}
+impl Parse for CacheableDynArgs {
+  fn parse(input: ParseStream) -> Result<Self> {
+    let context = input.parse::<syn::Path>()?;
+    Ok(Self { context })
   }
 }
 
-fn impl_trait(mut input: ItemTrait) -> TokenStream {
+pub fn impl_trait(args: CacheableDynArgs, mut input: ItemTrait) -> TokenStream {
+  let context = &args.context;
   let trait_ident = &input.ident;
   let flag_ident = Ident::new(&format!("{trait_ident}Flag"), trait_ident.span());
   let flag_vis = &input.vis;
 
-  input
-    .supertraits
-    .push(parse_quote!(rspack_cacheable::Cacheable));
-  input
-    .supertraits
-    .push(parse_quote!(rspack_cacheable::r#dyn::CacheableDyn));
+  //  input
+  //    .supertraits
+  //    .push(parse_quote!(rspack_cacheable::with::AsDynConverter));
+  input.items.push(parse_quote! {
+      #[doc(hidden)]
+      fn __cacheable_dyn_type_name(&self) -> &'static str;
+  });
+  input.items.push(parse_quote! {
+      #[doc(hidden)]
+      fn __cacheable_dyn_to_data(&self, context: &mut #context) -> Result<Vec<u8>, rspack_cacheable::SerializeError>;
+  });
+  input.items.push(parse_quote! {
+      #[doc(hidden)]
+      fn __cacheable_dyn_from_data(bytes: &[u8], context: &mut #context) -> Result<Self, rspack_cacheable::DeserializeError> where Self: Sized;
+  });
 
   quote! {
       #input
@@ -31,8 +44,8 @@ fn impl_trait(mut input: ItemTrait) -> TokenStream {
       const _: () = {
           use rspack_cacheable::__private::inventory;
           use rspack_cacheable::__private::once_cell;
-          use rspack_cacheable::r#dyn::CacheableDynData;
-          type DeserializeFn = fn(&[u8]) -> Box<dyn #trait_ident>;
+          use rspack_cacheable::{with::AsDynConverter, DeserializeError, SerializeError};
+          type DeserializeFn = fn(&[u8], &mut #context) -> Result<Box<dyn #trait_ident>, DeserializeError>;
 
           #flag_vis struct #flag_ident {
               name: &'static str,
@@ -63,17 +76,17 @@ fn impl_trait(mut input: ItemTrait) -> TokenStream {
               }
               map
           });
-
-          impl rspack_cacheable::Cacheable for Box<dyn #trait_ident> {
-              fn serialize(&self) -> Vec<u8> {
+          impl AsDynConverter for Box<dyn #trait_ident> {
+              type Context = #context;
+              fn to_bytes(&self, context: &mut Self::Context) -> Result<Vec<u8>, SerializeError> {
                   let inner = self.as_ref();
-                  let data = CacheableDynData(inner.type_name(), inner.serialize());
-                  rspack_cacheable::to_bytes(&data)
+                  let data = (String::from(inner.__cacheable_dyn_type_name()), inner.__cacheable_dyn_to_data(context)?);
+                  rspack_cacheable::to_bytes(&data, context)
               }
-              fn deserialize(bytes: &[u8]) -> Self where Self: Sized {
-                  let CacheableDynData(name, data) = rspack_cacheable::from_bytes::<CacheableDynData>(bytes);
+              fn from_bytes(bytes: &[u8], context: &mut Self::Context) -> Result<Self, DeserializeError> where Self: Sized {
+                  let (name, data) = rspack_cacheable::from_bytes::<(String, Vec<u8>), #context>(bytes, context)?;
                   let deserialize_fn = REGISTRY.get(name.as_str()).expect("unsupport data type when deserialize");
-                  deserialize_fn(&data)
+                  deserialize_fn(&data, context)
               }
           }
       };
@@ -81,12 +94,9 @@ fn impl_trait(mut input: ItemTrait) -> TokenStream {
   .into()
 }
 
-fn impl_impl(input: ItemImpl) -> TokenStream {
-  let trait_ident = input
-    .trait_
-    .as_ref()
-    .map(|inner| inner.1.get_ident())
-    .expect("expect impl trait");
+pub fn impl_impl(args: CacheableDynArgs, mut input: ItemImpl) -> TokenStream {
+  let context = &args.context;
+  let trait_ident = &input.trait_.as_ref().unwrap().1;
   let target_ident = &input.self_ty;
   let target_ident_string = match &*input.self_ty {
     Type::Path(inner) => {
@@ -98,6 +108,25 @@ fn impl_impl(input: ItemImpl) -> TokenStream {
     }
   };
 
+  input.items.push(parse_quote! {
+      #[doc(hidden)]
+      fn __cacheable_dyn_type_name(&self) -> &'static str {
+          #target_ident_string
+      }
+  });
+  input.items.push(parse_quote! {
+      #[doc(hidden)]
+      fn __cacheable_dyn_to_data(&self, context: &mut #context) -> Result<Vec<u8>, rspack_cacheable::SerializeError> {
+          rspack_cacheable::to_bytes(self, context)
+      }
+  });
+  input.items.push(parse_quote! {
+      #[doc(hidden)]
+      fn __cacheable_dyn_from_data(bytes: &[u8], context: &mut #context) -> Result<Self, rspack_cacheable::DeserializeError> where Self: Sized {
+          rspack_cacheable::from_bytes::<Self, #context>(bytes, context)
+      }
+  });
+
   quote! {
       #input
 
@@ -105,15 +134,9 @@ fn impl_impl(input: ItemImpl) -> TokenStream {
       const _: () = {
           use rspack_cacheable::__private::inventory;
           inventory::submit! {
-              <dyn #trait_ident>::cacheable_flag(#target_ident_string, |bytes: &[u8]| {
-                  Box::new(rspack_cacheable::from_bytes::<#target_ident>(bytes))
+              <dyn #trait_ident>::cacheable_flag(#target_ident_string, |bytes, context| {
+                  Ok(Box::new(<#target_ident as #trait_ident>::__cacheable_dyn_from_data(bytes, context)?))
               })
-          }
-
-          impl rspack_cacheable::r#dyn::CacheableDyn for #target_ident {
-              fn type_name(&self) -> String {
-                  String::from(#target_ident_string)
-              }
           }
       };
   }

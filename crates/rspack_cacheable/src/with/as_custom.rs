@@ -8,8 +8,9 @@ pub struct AsCustom;
 
 pub trait AsCustomConverter {
   type S;
+  type Context;
   fn to(&self) -> Self::S;
-  fn from(data: &Self::S) -> Self
+  fn from(data: &Self::S, ctx: &mut Self::Context) -> Self
   where
     Self: Sized;
 }
@@ -45,13 +46,13 @@ where
 
 impl<T, O, D> DeserializeWith<<O as Archive>::Archived, T, D> for AsCustom
 where
-  T: AsCustomConverter<S = O>,
+  T: AsCustomConverter<S = O, Context = D>,
   O: Archive,
   O::Archived: Deserialize<O, D>,
   D: Fallible + ?Sized,
 {
   fn deserialize_with(field: &<O as Archive>::Archived, d: &mut D) -> Result<T, D::Error> {
     let data = <O::Archived as Deserialize<O, D>>::deserialize(field, d)?;
-    Ok(AsCustomConverter::from(&data))
+    Ok(AsCustomConverter::from(&data, d))
   }
 }

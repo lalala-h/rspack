@@ -82,5 +82,12 @@ pub fn cacheable_dyn(
   args: proc_macro::TokenStream,
   tokens: proc_macro::TokenStream,
 ) -> proc_macro::TokenStream {
-  cacheable_dyn::impl_cacheable_dyn(args, tokens)
+  let args = syn::parse_macro_input!(args as cacheable_dyn::CacheableDynArgs);
+  let input = syn::parse_macro_input!(tokens as syn::Item);
+
+  match input {
+    syn::Item::Trait(input) => cacheable_dyn::impl_trait(args, input),
+    syn::Item::Impl(input) => cacheable_dyn::impl_impl(args, input),
+    _ => panic!("expect Trait or Impl"),
+  }
 }

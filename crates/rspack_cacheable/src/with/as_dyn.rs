@@ -1,22 +1,28 @@
 use rkyv::{
-  ser::{ScratchSpace, Serializer},
   vec::{ArchivedVec, VecResolver},
   with::{ArchiveWith, DeserializeWith, SerializeWith},
-  Fallible,
 };
 
-use crate::{from_bytes, r#dyn::CacheableDynData, to_bytes, Cacheable};
+use crate::{CacheableDeserializer, CacheableSerializer, DeserializeError, SerializeError};
 
-pub struct AsCacheable;
+pub struct AsDyn;
+
+pub trait AsDynConverter {
+  type Context;
+  fn to_bytes(&self, context: &mut Self::Context) -> Result<Vec<u8>, SerializeError>;
+  fn from_bytes(s: &[u8], context: &mut Self::Context) -> Result<Self, DeserializeError>
+  where
+    Self: Sized;
+}
 
 pub struct AsCacheableResolver {
   inner: VecResolver,
   len: usize,
 }
 
-impl<T> ArchiveWith<T> for AsCacheable
+impl<T, C> ArchiveWith<T> for AsDyn
 where
-  T: Cacheable,
+  T: AsDynConverter<Context = C>,
 {
   type Archived = ArchivedVec<u8>;
   type Resolver = AsCacheableResolver;
@@ -32,14 +38,16 @@ where
   }
 }
 
-impl<T, S> SerializeWith<T, S> for AsCacheable
+impl<'a, T, C> SerializeWith<T, CacheableSerializer<'a, C>> for AsDyn
 where
-  T: Cacheable,
-  S: ?Sized + Serializer + ScratchSpace,
+  T: AsDynConverter<Context = C>,
 {
   #[inline]
-  fn serialize_with(field: &T, serializer: &mut S) -> Result<Self::Resolver, S::Error> {
-    let bytes = &field.serialize();
+  fn serialize_with(
+    field: &T,
+    serializer: &mut CacheableSerializer<'a, C>,
+  ) -> Result<Self::Resolver, SerializeError> {
+    let bytes = &field.to_bytes(serializer.get_context())?;
     Ok(AsCacheableResolver {
       inner: ArchivedVec::serialize_from_slice(bytes, serializer)?,
       len: bytes.len(),
@@ -47,19 +55,21 @@ where
   }
 }
 
-impl<T, D> DeserializeWith<ArchivedVec<u8>, T, D> for AsCacheable
+impl<'a, T, C> DeserializeWith<ArchivedVec<u8>, T, CacheableDeserializer<'a, C>> for AsDyn
 where
-  T: Cacheable,
-  D: ?Sized + Fallible,
+  T: AsDynConverter<Context = C>,
 {
   #[inline]
-  fn deserialize_with(field: &ArchivedVec<u8>, _: &mut D) -> Result<T, D::Error> {
-    Ok(Cacheable::deserialize(field))
+  fn deserialize_with(
+    field: &ArchivedVec<u8>,
+    de: &mut CacheableDeserializer<'a, C>,
+  ) -> Result<T, DeserializeError> {
+    AsDynConverter::from_bytes(field, de.get_context())
   }
 }
 
 // for rspack_source
-use std::sync::Arc;
+/*use std::sync::Arc;
 
 use rspack_sources::RawSource;
 impl Cacheable for rspack_sources::BoxSource {
@@ -106,4 +116,4 @@ impl Cacheable for rspack_sources::BoxSource {
       }
     }
   }
-}
+}*/

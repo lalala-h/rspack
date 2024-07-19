@@ -40,8 +40,6 @@ pub fn impl_cacheable(tokens: TokenStream) -> TokenStream {
     _ => panic!("expect enum or struct"),
   }
 
-  let ident = get_ident(&input);
-
   quote! {
       #[derive(
           rspack_cacheable::__private::rkyv::Archive,
@@ -50,23 +48,23 @@ pub fn impl_cacheable(tokens: TokenStream) -> TokenStream {
       )]
       #[archive(check_bytes, crate="rspack_cacheable::__private::rkyv")]
       #input
-      impl rspack_cacheable::Cacheable for #ident {
-          #[inline]
-          fn serialize(&self) -> Vec<u8> {
-              rspack_cacheable::__private::rkyv::to_bytes::<_, 1024>(self).expect("serialize #ident failed").to_vec()
-          }
-          #[inline]
-          fn deserialize(bytes: &[u8]) -> Self where Self: Sized {
-              rspack_cacheable::__private::rkyv::from_bytes::<Self>(bytes).expect("deserialize #ident failed")
-          }
-      }
   }
   .into()
 }
 
 pub fn impl_cacheable_with(tokens: TokenStream, with: syn::Path) -> TokenStream {
   let input = parse_macro_input!(tokens as Item);
-  let ident = get_ident(&input);
+  let (ident, _impl_generics, _ty_generics, _where_clause) = match &input {
+    Item::Enum(input) => {
+      let (a, b, c) = input.generics.split_for_impl();
+      (&input.ident, a, b, c)
+    }
+    Item::Struct(input) => {
+      let (a, b, c) = input.generics.split_for_impl();
+      (&input.ident, a, b, c)
+    }
+    _ => panic!("expect enum or struct"),
+  };
   let archived = quote! {<#with as rkyv::with::ArchiveWith<#ident>>::Archived};
   let resolver = quote! {<#with as rkyv::with::ArchiveWith<#ident>>::Resolver};
   let rkyv_with = quote! {rkyv::with::With<#ident, #with>};
@@ -108,38 +106,20 @@ pub fn impl_cacheable_with(tokens: TokenStream, with: syn::Path) -> TokenStream 
                   )
               }
           }
-          impl rspack_cacheable::Cacheable for #ident {
-              #[inline]
-              fn serialize(&self) -> Vec<u8> {
-                  rkyv::to_bytes::<_, 1024>(self).expect("serialize #ident failed").to_vec()
-              }
-              #[inline]
-              fn deserialize(bytes: &[u8]) -> Self where Self: Sized {
-                  rkyv::from_bytes::<Self>(bytes).expect("deserialize #ident failed")
-              }
-          }
       };
   }
   .into()
 }
 
-fn get_ident(input: &Item) -> &syn::Ident {
-  match &input {
-    Item::Enum(input) => &input.ident,
-    Item::Struct(input) => &input.ident,
-    _ => panic!("expect enum or struct"),
-  }
-}
-
 fn add_attr_for_field(field: &mut syn::Field) {
   if let syn::Type::Path(ty_path) = &field.ty {
-    if let Some(seg) = &ty_path.path.segments.first() {
+    if let Some(seg) = &ty_path.path.segments.last() {
       if seg.ident == "Box" {
         if let syn::PathArguments::AngleBracketed(arg) = &seg.arguments {
           if let Some(syn::GenericArgument::Type(syn::Type::TraitObject(_))) = &arg.args.first() {
             // for Box<dyn xxx>
             field.attrs.push(syn::parse_quote! {
-                #[with(rspack_cacheable::with::AsCacheable)]
+                #[with(rspack_cacheable::with::AsDyn)]
             });
             return;
           }
@@ -148,13 +128,23 @@ fn add_attr_for_field(field: &mut syn::Field) {
 
       if seg.ident == "Option" {
         if let syn::PathArguments::AngleBracketed(arg) = &seg.arguments {
-          if let Some(syn::GenericArgument::Type(syn::Type::Path(sub_path))) = &arg.args.first() {
-            if sub_path.path.is_ident("JsonValue") {
-              // for Option<JsonValue>
-              field.attrs.push(syn::parse_quote! {
-              #[with(rspack_cacheable::with::AsOption<rspack_cacheable::with::AsString>)]
-                            });
-              return;
+          if let Some(syn::GenericArgument::Type(syn::Type::Path(sub_path))) = &arg.args.last() {
+            if let Some(seg) = sub_path.path.segments.last() {
+              if seg.ident == "JsonValue" {
+                // for Option<JsonValue>
+                field.attrs.push(syn::parse_quote! {
+                    #[with(rspack_cacheable::with::AsOption<rspack_cacheable::with::AsString>)]
+                });
+                return;
+              }
+
+              if seg.ident == "BoxSource" {
+                // for Option<BoxSource>
+                field.attrs.push(syn::parse_quote! {
+                    #[with(rspack_cacheable::with::AsOption<rspack_cacheable::with::AsCacheable>)]
+                });
+                return;
+              }
             }
           }
         }
@@ -162,16 +152,38 @@ fn add_attr_for_field(field: &mut syn::Field) {
 
       if seg.ident == "HashSet" {
         if let syn::PathArguments::AngleBracketed(arg) = &seg.arguments {
-          if let Some(syn::GenericArgument::Type(syn::Type::Path(sub_path))) = &arg.args.first() {
-            if sub_path.path.is_ident("PathBuf") || sub_path.path.is_ident("Atom") {
-              // for HashSet<PathBuf> and HashSet<Atom>
+          if let Some(syn::GenericArgument::Type(syn::Type::Path(sub_path))) = &arg.args.last() {
+            if sub_path.path.is_ident("PathBuf") {
+              // for HashSet<PathBuf>
               field.attrs.push(syn::parse_quote! {
                   #[with(rspack_cacheable::with::AsVec<rspack_cacheable::with::AsString>)]
               });
               return;
             }
+            if sub_path.path.is_ident("Atom") {
+              // for HashSet<Atom>
+              field.attrs.push(syn::parse_quote! {
+                  #[with(rspack_cacheable::with::AsVec<rspack_cacheable::with::AsRefStr>)]
+              });
+              return;
+            }
           }
         }
+      }
+
+      if seg.ident == "BoxSource" {
+        field.attrs.push(syn::parse_quote! {
+            #[with(rspack_cacheable::with::AsCacheable)]
+        });
+        return;
+      }
+
+      if seg.ident == "RwLock" {
+        // TODO
+        field.attrs.push(syn::parse_quote! {
+            #[with(rspack_cacheable::with::Skip)]
+        });
+        return;
       }
     }
   }
