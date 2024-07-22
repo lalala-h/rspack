@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use rspack_fs::AsyncFileSystem;
 use serde::{Deserialize, Serialize};
-use tokio::fs as async_fs;
 use tokio::sync::Mutex;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -98,20 +98,34 @@ impl Lockfile {
 
 #[async_trait]
 pub trait LockfileAsync {
-  async fn read_from_file_async<P: AsRef<Path> + Send>(path: P) -> io::Result<Lockfile>;
-  async fn write_to_file_async<P: AsRef<Path> + Send>(&self, path: P) -> io::Result<()>;
+  async fn read_from_file_async<P: AsRef<Path> + Send>(
+    path: P,
+    filesystem: &dyn AsyncFileSystem,
+  ) -> io::Result<Lockfile>;
+  async fn write_to_file_async<P: AsRef<Path> + Send>(
+    &self,
+    path: P,
+    filesystem: &dyn AsyncFileSystem,
+  ) -> io::Result<()>;
 }
 
 #[async_trait]
 impl LockfileAsync for Lockfile {
-  async fn read_from_file_async<P: AsRef<Path> + Send>(path: P) -> io::Result<Lockfile> {
-    let content = async_fs::read_to_string(path).await?;
+  async fn read_from_file_async<P: AsRef<Path> + Send>(
+    path: P,
+    filesystem: &dyn AsyncFileSystem,
+  ) -> io::Result<Lockfile> {
+    let content = filesystem.read_to_string(path).await?;
     Lockfile::parse(&content).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
   }
 
-  async fn write_to_file_async<P: AsRef<Path> + Send>(&self, path: P) -> io::Result<()> {
+  async fn write_to_file_async<P: AsRef<Path> + Send>(
+    &self,
+    path: P,
+    filesystem: &dyn AsyncFileSystem,
+  ) -> io::Result<()> {
     let content = self.to_json_string();
-    async_fs::write(path, content).await
+    filesystem.write(path, content.as_bytes()).await
   }
 }
 
@@ -119,13 +133,15 @@ impl LockfileAsync for Lockfile {
 pub struct LockfileCache {
   lockfile: Arc<Mutex<Lockfile>>,
   lockfile_path: Option<PathBuf>,
+  filesystem: Arc<dyn AsyncFileSystem>,
 }
 
 impl LockfileCache {
-  pub fn new(lockfile_path: Option<PathBuf>) -> Self {
+  pub fn new(lockfile_path: Option<PathBuf>, filesystem: Arc<dyn AsyncFileSystem>) -> Self {
     LockfileCache {
       lockfile: Arc::new(Mutex::new(Lockfile::new())),
       lockfile_path,
+      filesystem,
     }
   }
 
@@ -133,8 +149,8 @@ impl LockfileCache {
     let mut lockfile = self.lockfile.lock().await;
 
     if let Some(lockfile_path) = &self.lockfile_path {
-      if lockfile_path.exists() {
-        match Lockfile::read_from_file_async(lockfile_path).await {
+      if self.filesystem.exists(lockfile_path).await? {
+        match Lockfile::read_from_file_async(lockfile_path, &*self.filesystem).await {
           Ok(lf) => {
             *lockfile = lf;
           }
@@ -151,20 +167,25 @@ impl LockfileCache {
 
     if let Some(lockfile_path) = &self.lockfile_path {
       if let Some(parent) = lockfile_path.parent() {
-        async_fs::create_dir_all(parent).await?;
+        self.filesystem.create_dir_all(parent).await?;
       }
       let content = lockfile.to_json_string();
-      async_fs::write(lockfile_path, &content).await?;
+      self
+        .filesystem
+        .write(lockfile_path, content.as_bytes())
+        .await?;
     }
 
     Ok(())
   }
 }
+
 impl Default for LockfileCache {
   fn default() -> Self {
     LockfileCache {
       lockfile: Arc::new(Mutex::new(Lockfile::new())),
       lockfile_path: None,
+      filesystem: Arc::new(rspack_fs::AsyncMemoryFileSystem::default()),
     }
   }
 }
