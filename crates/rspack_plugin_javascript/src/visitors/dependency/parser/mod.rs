@@ -207,7 +207,7 @@ pub struct JavascriptParser<'parser> {
   pub(crate) warning_diagnostics: Vec<Box<dyn Diagnostic + Send + Sync>>,
   pub dependencies: Vec<BoxDependency>,
   pub(crate) presentational_dependencies: Vec<Box<dyn DependencyTemplate>>,
-  pub(crate) blocks: Vec<AsyncDependenciesBlock>,
+  pub(crate) blocks: Vec<Box<AsyncDependenciesBlock>>,
   // TODO: remove `additional_data` once we have builtin:css-extract-loader
   pub additional_data: AdditionalData,
   pub(crate) comments: Option<&'parser dyn Comments>,
@@ -262,11 +262,11 @@ impl<'parser> JavascriptParser<'parser> {
     parser_plugins: &'parser mut Vec<BoxJavascriptParserPlugin>,
     additional_data: AdditionalData,
   ) -> Self {
-    let warning_diagnostics: Vec<Box<dyn Diagnostic + Send + Sync>> = Vec::with_capacity(32);
-    let errors = Vec::with_capacity(32);
-    let dependencies = Vec::with_capacity(256);
-    let blocks = Vec::with_capacity(256);
-    let presentational_dependencies = Vec::with_capacity(256);
+    let warning_diagnostics: Vec<Box<dyn Diagnostic + Send + Sync>> = Vec::with_capacity(4);
+    let errors = Vec::with_capacity(4);
+    let dependencies = Vec::with_capacity(64);
+    let blocks = Vec::with_capacity(64);
+    let presentational_dependencies = Vec::with_capacity(64);
     let parser_exports_state: Option<bool> = None;
 
     let mut plugins: Vec<parser_plugin::BoxJavascriptParserPlugin> = Vec::with_capacity(32);

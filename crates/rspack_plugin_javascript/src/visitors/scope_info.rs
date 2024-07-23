@@ -81,6 +81,11 @@ pub struct ScopeInfoDB {
   tag_info_db: TagInfoDB,
 }
 
+#[test]
+fn test() {
+  dbg!(size_of::<ScopeInfoDB>());
+}
+
 impl Default for ScopeInfoDB {
   fn default() -> Self {
     Self::new()

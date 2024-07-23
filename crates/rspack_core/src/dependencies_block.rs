@@ -92,7 +92,7 @@ impl From<String> for AsyncDependenciesBlockIdentifier {
 pub struct AsyncDependenciesBlock {
   id: AsyncDependenciesBlockIdentifier,
   group_options: Option<GroupOptions>,
-  blocks: Vec<AsyncDependenciesBlock>,
+  blocks: Vec<Box<AsyncDependenciesBlock>>,
   block_ids: Vec<AsyncDependenciesBlockIdentifier>,
   dependency_ids: Vec<DependencyId>,
   dependencies: Vec<BoxDependency>,
@@ -164,7 +164,7 @@ impl AsyncDependenciesBlock {
     // self.blocks.push(block);
   }
 
-  pub fn take_blocks(&mut self) -> Vec<AsyncDependenciesBlock> {
+  pub fn take_blocks(&mut self) -> Vec<Box<AsyncDependenciesBlock>> {
     std::mem::take(&mut self.blocks)
   }
 
