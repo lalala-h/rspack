@@ -30,7 +30,7 @@
     "tailwindcss": "^3.2.7"
   },
   "devDependencies": {
-    "@biomejs/biome": "1.8.0",
+    "@biomejs/biome": "1.8.3",
     "@rspress/plugin-rss": "^1.26.1",
     "@rspress/shared": "^1.26.1",
     "@types/node": "^18.11.18",
@@ -39,7 +39,7 @@
     "case-police": "0.6.1",
     "cspell": "^8.7.0",
     "cspell-ban-words": "0.0.3",
-    "prettier": "3.2.5",
+    "prettier": "3.3.3",
     "rsbuild-plugin-google-analytics": "1.0.1",
     "rsbuild-plugin-open-graph": "1.0.1",
     "rspress": "^1.26.1",
